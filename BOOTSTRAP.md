@@ -65,6 +65,18 @@ start from an empty project (after an interrupted import, for instance).
 
 The command ends by printing the next step.
 
+Another release is imported the same way, into the same private project and
+into files that carry its version (`source/ecoinvent-3.13-cutoff-exchanges.parquet`
+and so on):
+
+```bash
+uv run dds-bootstrap-ecoinvent --ecoinvent-version 3.13
+```
+
+It is what a run with `DDS_BACKGROUND_ECOINVENT=3.13` needs, next to the 3.9.1
+files: see "A later ecoinvent release as background" in the README. Those
+files are licensed ecoinvent data too.
+
 ---
 
 ## 3. Fetch the flow list and build the registry

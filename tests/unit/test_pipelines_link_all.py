@@ -27,6 +27,8 @@ from reporting import RunReport
 from scoring.activity_location_overrides import ActivityLocationOverrides
 from scoring.exchange_frame_builder import ExchangeFrameBuilder
 from scoring.method_slug import MethodSlug
+from scoring.native_scorer import NativeLciaScorer
+from scoring.scoring_package import ScoringPackageStore
 from tests.fixtures.builders import FakeSimaProImporter
 
 
@@ -327,6 +329,110 @@ class TestEmitScoringPackage:
         payload = LinkAllPipeline._emit_scoring_package(sp, settings, RunReport())
         assert payload, "Scoring-package payload must be non-empty"
         assert "content_hash" in payload
+
+
+class TestEmitScoringPackageOnABackgroundRelease:
+    """The emit tail with ``background_ecoinvent_version`` set: the background
+    release's exchanges form the matrix, its continued flows are read into the
+    linking namespace, and the flows it introduced get its own factors."""
+
+    METHOD = ("ecoinvent-3.9.1", "EF v3.1", "climate change", "GWP100")
+
+    def _seed(self, settings):
+        release = settings.background_release
+        paths = settings.paths
+        paths.source.mkdir(parents=True, exist_ok=True)
+        steel = (release.db_name, "steel")
+        pd.DataFrame(
+            [
+                (*steel, *steel, 1.0, "production"),
+                (*steel, release.biosphere_db_name, "f-new", 2.0, "biosphere"),
+                (*steel, release.biosphere_db_name, "f-only-new", 3.0, "biosphere"),
+            ],
+            columns=[
+                "output_database",
+                "output_code",
+                "input_database",
+                "input_code",
+                "amount",
+                "type",
+            ],
+        ).to_parquet(paths.release_exchanges_parquet(release))
+        pd.DataFrame(
+            [("old-steel", "steel", 1.0, "", "")],
+            columns=["old_code", "new_code", "share", "old_label", "new_label"],
+        ).to_parquet(paths.registry_release_bridge_activities)
+        pd.DataFrame(
+            [("f-old", "f-new", "name")], columns=["old_code", "new_code", "how"]
+        ).to_parquet(paths.registry_release_bridge_flows)
+        settings.ef_methods_snapshot_for(release).write_text(
+            json.dumps(
+                {
+                    "methods": {
+                        "m": {
+                            "key": [release.method_prefix, *self.METHOD[1:]],
+                            "inherited_cfs": [
+                                {"db": release.biosphere_db_name, "code": "f-new", "amount": 99.0},
+                                {
+                                    "db": release.biosphere_db_name,
+                                    "code": "f-only-new",
+                                    "amount": 10.0,
+                                },
+                            ],
+                        }
+                    }
+                }
+            )
+        )
+        _seed_method_cfs_registry(
+            settings,
+            self.METHOD,
+            rows=[{"database": settings.biosphere_db_name, "code": "f-old", "amount": 1.0}],
+        )
+        _seed_biosphere_catalog(settings)
+        _seed_empty_ef_cf_parquet(settings)
+
+    def test_scores_on_the_background_release(self, settings):
+        settings = settings.with_background("99.0")
+        self._seed(settings)
+        release = settings.background_release
+        sp = FakeSimaProImporter(
+            [
+                {
+                    "database": "agb",
+                    "code": "a",
+                    "name": "bread",
+                    "type": "process",
+                    "unit": "kg",
+                    "exchanges": [
+                        {"type": "production", "input": ("agb", "a"), "amount": 1.0},
+                        {
+                            "type": "technosphere",
+                            "input": (release.db_name, "steel"),
+                            "amount": 0.5,
+                        },
+                    ],
+                }
+            ]
+        )
+        report = RunReport()
+
+        payload = LinkAllPipeline._emit_scoring_package(sp, settings, report)
+
+        assert payload["n_activities"] == 2
+        package = ScoringPackageStore(root=settings.paths.scoring_packages_root).read(
+            payload["content_hash"]
+        )
+        flow_id = ExchangeFrameBuilder.flow_id_for
+        continued = flow_id((settings.biosphere_db_name, "f-old"))
+        introduced = flow_id((release.biosphere_db_name, "f-only-new"))
+        assert set(package.biosphere.row_id_to_idx) == {continued, introduced}
+        bread = ("agb", "a")
+        results = NativeLciaScorer(package=package).score([(bread, flow_id(bread))], [self.METHOD])
+        # 0.5 steel x (2 kg of the continued flow x its registry factor 1
+        #              + 3 kg of the introduced flow x the background factor 10)
+        assert results[bread].scores[self.METHOD] == pytest.approx(0.5 * (2 * 1.0 + 3 * 10.0))
+        assert report.stages["background_cfs"]["factors_added"] == 1
 
 
 class TestColIdToLocationOverrides:

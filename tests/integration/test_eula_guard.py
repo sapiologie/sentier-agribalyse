@@ -64,6 +64,24 @@ class TestGuard:
         assert result.returncode == 1
         assert name in result.stderr
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "source/ecoinvent-3.13-cutoff-exchanges.parquet",
+            "source/ecoinvent-3.13-biosphere-flows.json",
+            "registry/release_bridge_activities.parquet",
+            "cache/linked_inventory/links_ecoinvent_3.13.json",
+        ],
+    )
+    def test_blocks_force_staged_files_of_a_background_release(self, repo, path):
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        _stage(repo, path, force=True)
+
+        result = _guard(repo)
+
+        assert result.returncode == 1
+        assert path in result.stderr
+
     def test_allows_the_stripped_archive_and_its_manifest(self, repo):
         _stage(repo, ARCHIVE, content=_archive("Wheat flour {FR}| production | Cut-off, U"))
         _stage(repo, "source/agribalyse-3.2-stripped-ecoinvent-processes.json")
@@ -128,6 +146,13 @@ class TestGitignore:
             "source/ecoinvent-3.9.1-cutoff-activities.json",
             "source/ecoinvent-3.9.1-biosphere-flows.json",
             "source/ef-v31-methods.json",
+            "source/ecoinvent-3.13-cutoff-exchanges.parquet",
+            "source/ecoinvent-3.13-cutoff-activities.json",
+            "source/ecoinvent-3.13-biosphere-flows.json",
+            "source/ecoinvent-3.13-ef-v31-methods.json",
+            "registry/release_bridge_activities.parquet",
+            "registry/release_bridge_flows.parquet",
+            "cache/linked_inventory/links_ecoinvent_3.13.json",
             "bw_package/README.md",
         ],
     )

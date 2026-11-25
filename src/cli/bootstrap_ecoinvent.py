@@ -18,6 +18,7 @@ from typing import ClassVar
 
 from bootstrap import EcoinventBootstrapper
 from cli._base import BaseCli
+from config import EcoinventRelease
 
 
 class BootstrapEcoinventCli(BaseCli):
@@ -31,6 +32,15 @@ class BootstrapEcoinventCli(BaseCli):
     @classmethod
     def parser(cls) -> argparse.ArgumentParser:
         p = super().parser()
+        p.add_argument(
+            "--ecoinvent-version",
+            default=None,
+            help=(
+                "ecoinvent release to import and snapshot. Default: the release Agribalyse "
+                "is linked against (3.9.1 for Agribalyse 3.2). Pass the background release "
+                "(e.g. 3.13) to prepare a run with DDS_BACKGROUND_ECOINVENT set."
+            ),
+        )
         p.add_argument(
             "--fresh",
             action="store_true",
@@ -59,11 +69,12 @@ class BootstrapEcoinventCli(BaseCli):
         # at import time. A private directory keeps the user's projects apart.
         os.environ[self.BRIGHTWAY_DIR_ENV] = str(brightway_dir)
         bd, bi = self._brightway()
-        report = EcoinventBootstrapper(settings=self.settings, bd=bd, bi=bi).run(
+        release = self._release(args.ecoinvent_version)
+        report = EcoinventBootstrapper(settings=self.settings, bd=bd, bi=bi, release=release).run(
             os.environ.get("ECOINVENT_USERNAME"), os.environ.get("ECOINVENT_PASSWORD")
         )
         state = "downloaded and imported" if report["imported"] else "already imported, reused"
-        print(f"ecoinvent {self.settings.resolved_ecoinvent_version}: {state}")
+        print(f"ecoinvent {release.version}: {state}")
         print(
             f"Wrote {report['exchanges']} exchanges, {report['activities']} activities, "
             f"{report['biosphere_flows']} elementary flows, {report['methods']} EF methods "
@@ -74,6 +85,11 @@ class BootstrapEcoinventCli(BaseCli):
             shutil.rmtree(brightway_dir, ignore_errors=True)
             print(f"Removed {brightway_dir}")
         print("Next: uv run dds-fetch-harmonised-flows, then uv run dds-build-registry")
+
+    def _release(self, version: str | None) -> EcoinventRelease:
+        if version is None:
+            return self.settings.linking_release
+        return EcoinventRelease(version, self.settings.ecoinvent_system_model)
 
     @staticmethod
     def _brightway() -> tuple[object, object]:

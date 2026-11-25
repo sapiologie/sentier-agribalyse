@@ -142,3 +142,41 @@ class TestSettings:
     )
     def test_default_pairing_table(self, agb, expected_ei):
         assert Settings.default_ecoinvent_for(agb) == expected_ei
+
+
+class TestBackgroundRelease:
+    def test_defaults_to_the_linking_release(self):
+        s = Settings()
+        assert s.background_release == s.linking_release
+        assert not s.has_background_release
+        assert s.ef_methods_snapshot_for(s.linking_release) == s.paths.ef_methods_snapshot_json
+
+    def test_a_background_version_names_its_own_databases_and_files(self, tmp_path: Path):
+        s = Settings(paths=Paths(package_root=tmp_path)).with_background("3.13")
+        assert s.has_background_release
+        assert s.ecoinvent_db_name == "ecoinvent-3.9.1-cutoff"
+        assert s.background_release.db_name == "ecoinvent-3.13-cutoff"
+        assert s.background_release.biosphere_db_name == "ecoinvent-3.13-biosphere"
+        assert s.ef_methods_snapshot_for(s.background_release) == (
+            tmp_path / "source" / "ecoinvent-3.13-ef-v31-methods.json"
+        )
+
+    def test_the_linking_release_keeps_its_historical_file_names(self, tmp_path: Path):
+        s = Settings(paths=Paths(package_root=tmp_path))
+        paths, release = s.paths, s.linking_release
+        assert paths.release_activities_json(release) == paths.ecoinvent_activities_json
+        assert paths.release_exchanges_parquet(release) == paths.ecoinvent_exchanges_parquet
+        assert paths.release_biosphere_flows_json(release) == paths.ecoinvent_biosphere_flows_json
+
+    def test_reads_the_background_release_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv(Settings.BACKGROUND_ENV, "3.13")
+        assert Settings.from_environment().background_release.version == "3.13"
+        monkeypatch.setenv(Settings.BACKGROUND_ENV, "")
+        assert not Settings.from_environment().has_background_release
+
+    def test_reads_the_embedded_copies_choice_from_the_environment(self, monkeypatch):
+        monkeypatch.delenv(Settings.BACKGROUND_ENV, raising=False)
+        monkeypatch.setenv(Settings.EMBEDDED_COPIES_ENV, "replace")
+        assert Settings.from_environment().replaces_embedded_copies
+        monkeypatch.delenv(Settings.EMBEDDED_COPIES_ENV)
+        assert not Settings.from_environment().replaces_embedded_copies

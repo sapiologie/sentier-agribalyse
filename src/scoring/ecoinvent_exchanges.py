@@ -23,6 +23,7 @@ subset:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,10 @@ class EcoinventExchangesIngester:
     """
 
     path: Path
+    input_renames: Mapping[tuple[str, str], tuple[str, str]] | None = None
+    """``(database, code)`` of an input -> the key it is read as. Used for a
+    background release, whose elementary flows are brought into the linking
+    release's namespace (``ReleaseBridge.background_flow_renames``)."""
 
     def load_long(self) -> pd.DataFrame:
         if not self.path.exists():
@@ -66,6 +71,9 @@ class EcoinventExchangesIngester:
         # rather than 670 k row-by-row calls.
         out_keys = list(zip(df["output_database"], df["output_code"], strict=False))
         in_keys = list(zip(df["input_database"], df["input_code"], strict=False))
+        if self.input_renames:
+            renames = self.input_renames
+            in_keys = [renames.get(key, key) for key in in_keys]
         unique = {k: ExchangeFrameBuilder.flow_id_for(k) for k in set(out_keys) | set(in_keys)}
         out_id = np.fromiter((unique[k] for k in out_keys), dtype="int64", count=len(out_keys))
         in_id = np.fromiter((unique[k] for k in in_keys), dtype="int64", count=len(in_keys))
