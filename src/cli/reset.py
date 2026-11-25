@@ -55,6 +55,8 @@ class ResetCli(BaseCli):
 
         for pkl in (
             self.settings.paths.importer_cache_pkl,
+            self.settings.paths.importer_cache_copies_free_pkl,
+            self.settings.paths.agribalyse_csv_copies_free_cache,
             self.settings.paths.linked_cache_pkl,
         ):
             if pkl.exists():

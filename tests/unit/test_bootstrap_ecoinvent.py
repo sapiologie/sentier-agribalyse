@@ -16,6 +16,7 @@ from bootstrap import (
     EcoinventMetadataSnapshotter,
     EcoinventReleaseImporter,
 )
+from config import EcoinventRelease
 
 EI = "ecoinvent-3.9.1-cutoff"
 BIO = "ecoinvent-3.9.1-biosphere"
@@ -24,10 +25,14 @@ BIO = "ecoinvent-3.9.1-biosphere"
 class FakeBw2Data:
     """The slice of ``bw2data`` the bootstrap touches."""
 
-    def __init__(self, project_dir, *, node_ids: bool = True, loaded: bool = True):
+    def __init__(
+        self, project_dir, *, node_ids: bool = True, loaded: bool = True, version: str = "3.9.1"
+    ):
         self._project_dir = project_dir
         self.current = None
-        self.databases = {EI: {}, BIO: {}} if loaded else {}
+        self.ei = f"ecoinvent-{version}-cutoff"
+        self.bio = f"ecoinvent-{version}-biosphere"
+        self.databases = {self.ei: {}, self.bio: {}} if loaded else {}
         self.projects = types.SimpleNamespace(set_current=self._set_current, dir=project_dir)
         self._activities = [
             {
@@ -36,6 +41,7 @@ class FakeBw2Data:
                 "unit": "kilogram",
                 "location": "FR",
                 "reference product": "wheat grain",
+                "filename": "act-wheat_prod-wheat.spold",
             },
             {
                 "code": "a",
@@ -43,6 +49,8 @@ class FakeBw2Data:
                 "unit": "kilogram",
                 "location": "RER",
                 "reference product": "diesel",
+                "activity": "act-diesel",
+                "flow": "prod-diesel",
             },
         ]
         self._flows = [
@@ -61,25 +69,22 @@ class FakeBw2Data:
                 "unit": "kilogram",
             },
         ]
-        self._nodes = {11: {"database": BIO, "code": "f1"}, 12: {"database": BIO, "code": "f2"}}
-        flow = (lambda i, code: i) if node_ids else (lambda i, code: (BIO, code))
+        bio = self.bio
+        self._nodes = {11: {"database": bio, "code": "f1"}, 12: {"database": bio, "code": "f2"}}
+        flow = (lambda i, code: i) if node_ids else (lambda i, code: (bio, code))
         cfs = [(flow(12, "f2"), 29.8), (flow(11, "f1"), 1.0)]
+        prefix = f"ecoinvent-{version}"
         self.methods = {
-            (
-                "ecoinvent-3.9.1",
-                "EF v3.1",
-                "climate change",
-                "global warming potential (GWP100)",
-            ): cfs,
-            ("ecoinvent-3.9.1", "EF v3.1 no LT", "climate change", "x"): cfs,
-            ("ecoinvent-3.9.1", "ReCiPe", "climate change", "x"): cfs,
+            (prefix, "EF v3.1", "climate change", "global warming potential (GWP100)"): cfs,
+            (prefix, "EF v3.1 no LT", "climate change", "x"): cfs,
+            (prefix, "ReCiPe", "climate change", "x"): cfs,
         }
 
     def _set_current(self, name):
         self.current = name
 
     def Database(self, name):
-        return {EI: self._activities, BIO: self._flows}[name]
+        return {self.ei: self._activities, self.bio: self._flows}[name]
 
     def Method(self, key):
         return types.SimpleNamespace(load=lambda: self.methods[key])
@@ -95,10 +100,10 @@ class FakeBw2Io:
 
     def import_ecoinvent_release(self, **kwargs):
         self.calls.append(kwargs)
-        self.bd.databases = {EI: {}, BIO: {}}
+        self.bd.databases = {self.bd.ei: {}, self.bd.bio: {}}
 
 
-def _sqlite(path, rows=None):
+def _sqlite(path, rows=None, db=EI):
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TABLE activitydataset (database TEXT, code TEXT)")
@@ -106,8 +111,8 @@ def _sqlite(path, rows=None):
             "CREATE TABLE exchangedataset (output_database TEXT, output_code TEXT, "
             "input_database TEXT, input_code TEXT, type TEXT, data BLOB)"
         )
-        conn.execute("INSERT INTO activitydataset VALUES (?, ?)", (EI, "a"))
-        for row in rows if rows is not None else [(EI, "a", EI, "a", "production", 1.0)]:
+        conn.execute("INSERT INTO activitydataset VALUES (?, ?)", (db, "a"))
+        for row in rows if rows is not None else [(db, "a", db, "a", "production", 1.0)]:
             conn.execute(
                 "INSERT INTO exchangedataset VALUES (?, ?, ?, ?, ?, ?)",
                 (*row[:5], pickle.dumps({"amount": row[5]})),
@@ -132,6 +137,8 @@ class TestMetadataSnapshotter:
                 "unit": "kilogram",
                 "location": "RER",
                 "reference_product": "diesel",
+                "activity_uuid": "act-diesel",
+                "product_uuid": "prod-diesel",
             },
             {
                 "code": "b",
@@ -139,6 +146,8 @@ class TestMetadataSnapshotter:
                 "unit": "kilogram",
                 "location": "FR",
                 "reference_product": "wheat grain",
+                "activity_uuid": "act-wheat",
+                "product_uuid": "prod-wheat",
             },
         ]
         assert counts["activities"] == 2
@@ -258,6 +267,40 @@ class TestBootstrapper:
             paths.ef_methods_snapshot_json,
         ):
             assert path.exists()
+
+    def test_another_release_goes_to_files_named_after_it(self, settings, tmp_path):
+        release = EcoinventRelease("3.13")
+        project = tmp_path / "bw" / "dds-bootstrap.abc"
+        _sqlite(project / "lci" / "databases.db", db=release.db_name)
+        bd = FakeBw2Data(project, loaded=False, version="3.13")
+        bi = FakeBw2Io(bd)
+
+        report = EcoinventBootstrapper(settings=settings, bd=bd, bi=bi, release=release).run(
+            "user", "secret"
+        )
+
+        paths = settings.paths
+        assert report["version"] == "3.13"
+        assert bi.calls[0]["version"] == "3.13"
+        assert paths.release_exchanges_parquet(release).name == (
+            "ecoinvent-3.13-cutoff-exchanges.parquet"
+        )
+        for path in (
+            paths.release_exchanges_parquet(release),
+            paths.release_activities_json(release),
+            paths.release_biosphere_flows_json(release),
+            paths.release_ef_methods_json(release),
+        ):
+            assert path.exists()
+        methods = json.loads(paths.release_ef_methods_json(release).read_text())["methods"]
+        assert all(key.startswith("ecoinvent-3.13 / EF v3.1") for key in methods)
+        for path in (
+            paths.ecoinvent_exchanges_parquet,
+            paths.ecoinvent_activities_json,
+            paths.ecoinvent_biosphere_flows_json,
+            paths.ef_methods_snapshot_json,
+        ):
+            assert not path.exists()
 
     def test_second_run_reuses_the_project(self, settings, tmp_path):
         project = tmp_path / "bw" / "dds-bootstrap.abc"

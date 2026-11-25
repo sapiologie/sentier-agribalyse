@@ -19,6 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from config.release import EcoinventRelease
+
 # src/config/paths.py → src/config → src → repo root
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 
@@ -83,6 +85,13 @@ class Paths:
         return self.cache / "AGB32_ecoinvent_free.CSV"
 
     @property
+    def agribalyse_csv_copies_free_cache(self) -> Path:
+        """The full export without its ``Copied from Ecoinvent`` blocks, ADEME's
+        ``Adapted from Ecoinvent`` datasets kept. Built from the full export on
+        first use (``AgribalyseCsvSource``). Licensed: lives under ``cache/``."""
+        return self.cache / "AGB32_copies_free.CSV"
+
+    @property
     def stripped_processes_json(self) -> Path:
         """Manifest of the blocks ``dds-strip-ecoinvent`` removed: process
         identifier, type and block sha256. No names, no amounts."""
@@ -123,6 +132,12 @@ class Paths:
         """Curated elementary-flow name pairs (ecoinvent → SimaPro) consumed by
         ``SimaProCfFilter`` on top of the biosphere flowmap."""
         return self.source / "simapro-ef31-flow-synonyms.json"
+
+    @property
+    def background_flow_synonyms_json(self) -> Path:
+        """Names the EF flow list gives to substances ecoinvent holds under another
+        name. Read by ``BackgroundFlowResolver`` for the linked-inventory export."""
+        return self.source / "ef-flow-names-in-ecoinvent.json"
 
     @property
     def biosphere_flowmap_json(self) -> Path:
@@ -213,9 +228,29 @@ class Paths:
         """
         return self.source / "ecoinvent-3.9.1-cutoff-exchanges.parquet"
 
+    # --- Per-release snapshots (``dds-bootstrap-ecoinvent --ecoinvent-version``) ---
+    # For the 3.9.1 linking release these are the four paths above.
+
+    def release_activities_json(self, release: EcoinventRelease) -> Path:
+        return self.source / f"{release.db_name}-activities.json"
+
+    def release_exchanges_parquet(self, release: EcoinventRelease) -> Path:
+        return self.source / f"{release.db_name}-exchanges.parquet"
+
+    def release_biosphere_flows_json(self, release: EcoinventRelease) -> Path:
+        return self.source / f"{release.biosphere_db_name}-flows.json"
+
+    def release_ef_methods_json(self, release: EcoinventRelease) -> Path:
+        return self.source / f"{release.method_prefix}-ef-v31-methods.json"
+
     @property
     def importer_cache_pkl(self) -> Path:
         return self.cache / "importer_cache.pkl"
+
+    @property
+    def importer_cache_copies_free_pkl(self) -> Path:
+        """Parse cache of :pyattr:`agribalyse_csv_copies_free_cache`."""
+        return self.cache / "importer_cache_copies_free.pkl"
 
     @property
     def linked_cache_pkl(self) -> Path:
@@ -286,6 +321,18 @@ class Paths:
     @property
     def registry_ecoinvent_catalog(self) -> Path:
         return self.registry / "ecoinvent_catalog.parquet"
+
+    @property
+    def registry_release_bridge_activities(self) -> Path:
+        """Linking-release activity -> background-release activities with their
+        shares (``dds-build-release-bridge``). Licensed nomenclature: never shipped."""
+        return self.registry / "release_bridge_activities.parquet"
+
+    @property
+    def registry_release_bridge_flows(self) -> Path:
+        """Linking-release elementary flow -> background-release elementary flow
+        (``dds-build-release-bridge``)."""
+        return self.registry / "release_bridge_flows.parquet"
 
     @property
     def registry_ef_flows(self) -> Path:

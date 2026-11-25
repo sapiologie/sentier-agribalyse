@@ -1,0 +1,28 @@
+{
+ "name": "ef-flow-names-in-ecoinvent",
+ "description": "Names the EF flow list gives to substances that ecoinvent's elementary flow list holds under another name. Read by BackgroundFlowResolver when the linked inventory is exported for a store that holds only ecoinvent. Left: the EF name, lower case. Right: the ecoinvent name, lower case. Unspecified chromium follows ecoinvent's own convention, which records it as chromium III.",
+ "names": {
+  "nitrogen, total (excluding n2)": "nitrogen",
+  "phosphorus, total": "phosphorus",
+  "chromium": "chromium iii",
+  "calcium": "calcium ii",
+  "copper (ii) sulfate": "copper sulfate",
+  "copper (i) oxide": "copper(i) oxide",
+  "hydrocyanic acid": "hydrogen cyanide",
+  "fosetyl-aluminum": "fosetyl-al",
+  "kresoxim methyl": "kresoxim-methyl",
+  "ethoprophos": "ethoprop",
+  "systhane": "myclobutanil",
+  "demeton-s-methyl sulfoxide": "oxydemeton-methyl",
+  "n-(cyanomethyl)-4-(trifluoromethyl)pyridine-3-carboxamide": "flonicamid",
+  "2,4,6,8-tetramethyl-1,3,5,7-tetraoxacyclooctane": "metaldehyde",
+  "5-butyl-2-ethylamino-6-methylpyrimidin-4-yldimethylsulphamate": "bupirimate",
+  "benzyl(purin-6-yl)amine": "6-benzyladenine",
+  "propyl [3-(dimethylamino)propyl]carbamate monohydrochloride": "propamocarb hcl",
+  "cis-4-[3-(p-tert-butylphenyl)-2-methylpropyl]-2,6-dimethylmorpholine": "fenpropimorph",
+  "n-[(1z)-[(cyclopropylmethoxy)imino][2,3-difluoro-6-(trifluoromethyl)phenyl]methyl]-2-phenylacetamide": "cyflufenamid",
+  "2,3-dihydro-2,2-dimethyl-[(dibutylamino)thio]methyl carbamic acid": "carbosulfan",
+  "(e)-[(2-{[6-(2-chlorophenoxy)-5-fluoropyrimidin-4-yl]oxy}phenyl)(5,6-dihydro-1,4,2-dioxazin-3-yl)methylidene](methoxy)amine": "fluoxastrobin",
+  "(s)-cyano(3-phenoxyphenyl)methyl (1r,3s)-3-[(1z)-3-[(1,1,1,3,3,3-hexafluoropropan-2-yl)oxy]-3-oxoprop-1-en-1-yl]-2,2-dimethylcyclopropane-1-carboxylate": "acrinathrin"
+ }
+}

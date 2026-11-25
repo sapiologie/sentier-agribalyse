@@ -8,11 +8,14 @@
 # Activate once per clone:  git config core.hooksPath .githooks
 set -euo pipefail
 
-# Extended-regex of forbidden staged paths. The last alternative blocks any
+# Extended-regex of forbidden staged paths. `source/ecoinvent-*` covers the
+# snapshots of every release (the linking one and any background release), and
+# the release bridge and the linked-inventory export are built from them. The
+# last alternative blocks any
 # uncompressed SimaPro export under source/ (ADEME's full AGB32_final.CSV
 # embeds ecoinvent inventories). The only export that ships is the stripped
 # archive source/AGB32_ecoinvent_free.CSV.xz, written by dds-strip-ecoinvent.
-forbidden='^(source/ecoinvent-3\.9\.1-cutoff-exchanges\.parquet|source/ecoinvent-3\.9\.1-cutoff-activities\.json|source/ecoinvent-3\.9\.1-biosphere-flows\.json|source/ef-v31-methods\.json|registry/method_cfs/ecoinvent-3\.9\.1__|bw_package/|source/[^/]*\.(CSV|csv)$)'
+forbidden='^(source/ecoinvent-[^/]+|source/ef-v31-methods\.json|registry/method_cfs/ecoinvent-[^/]+__|registry/release_bridge_[^/]+\.parquet|cache/linked_inventory/|bw_package/|source/[^/]*\.(CSV|csv)$)'
 
 staged="$(git diff --cached --name-only --diff-filter=AM)"
 

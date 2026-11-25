@@ -40,6 +40,7 @@ import pandas as pd
 from config import Settings
 from core import StepTimer
 from core.logging import Logging
+from ef.background_cfs import BackgroundCfSupplement
 from ef.cf_registry import MethodCfRegistryBuilder, MethodCfRegistryLoader
 from ef.cf_simapro_filter import SimaProCfFilter
 from ef.cf_table import EfCfTable
@@ -99,6 +100,7 @@ from transforms import (
     WasteTreatmentDummyFixer,
     WasteTreatmentFunctionalPromoter,
 )
+from transforms.background_rebase import BackgroundRebaser, ReleaseBridge
 from transforms.linked_cache import LinkedSpCache
 
 
@@ -333,12 +335,12 @@ class LinkAllPipeline:
         report.add_stage("orphan_product_relink", orphan_stats)
 
         # Rebuild the stripped ecoinvent unit copies from the user's snapshot
-        # (ecoinvent-free CSV only: with the full export the copies are there).
+        # (not with the full export read as it is: there the copies are embedded).
         unit_copies = UnitCopyRebuilder(
             settings=s, catalog=ei_catalog, unit_converter=registry.unit_converter
         )
         rebuild = UnitCopyRebuild()
-        if AgribalyseCsvSource(settings=s).variant == AgribalyseCsvSource.ECOINVENT_FREE:
+        if AgribalyseCsvSource(settings=s).rebuilds_unit_copies:
             with StepTimer(log, "link.transforms.unit_copy_rebuild"):
                 rebuild = unit_copies.apply(sp)
 
@@ -367,6 +369,21 @@ class LinkAllPipeline:
                 "n_simapro_form_unit_mismatch": tech_stats.n_simapro_form_unit_mismatch,
             },
         )
+
+        # 7a. Background release: move every input linked to the linking release
+        # onto the release the inventory is scored on. Before the residual export,
+        # so an input whose dataset has no successor shows up there as unlinked.
+        if s.has_background_release:
+            with StepTimer(log, "link.background.rebase"):
+                rebase_stats = BackgroundRebaser(settings=s, bridge=ReleaseBridge.load(s)).apply(sp)
+            report.add_stage(
+                "background_rebase",
+                {
+                    "from": s.linking_release.version,
+                    "to": s.background_release.version,
+                    **rebase_stats,
+                },
+            )
 
         # 7. Pre-purge coverage + residual export
         report.add_coverage(CoverageReporter.from_sp_data("pre_write", sp.data))
@@ -533,9 +550,16 @@ class LinkAllPipeline:
 
         builder = ExchangeFrameBuilder()
         agb_long = builder.long_from_sp_data(sp.data)
-        ei_long = EcoinventExchangesIngester(
-            path=settings.paths.ecoinvent_exchanges_parquet
-        ).load_long()
+        bridge = ReleaseBridge.load(settings) if settings.has_background_release else None
+        if bridge is None:
+            ei_long = EcoinventExchangesIngester(
+                path=settings.paths.ecoinvent_exchanges_parquet
+            ).load_long()
+        else:
+            ei_long = EcoinventExchangesIngester(
+                path=settings.paths.release_exchanges_parquet(settings.background_release),
+                input_renames=bridge.background_flow_renames(),
+            ).load_long()
         combined_long = pd.concat([agb_long, ei_long], ignore_index=True)
         frame = builder.frame_from_long(combined_long)
         ei_catalog_path = settings.paths.registry_ecoinvent_catalog
@@ -589,6 +613,11 @@ class LinkAllPipeline:
 
         cf_loader = MethodCfRegistryLoader(settings.paths.registry_method_cfs_dir)
         raw_method_cfs = cf_loader.load_all()
+        if bridge is not None:
+            raw_method_cfs, cf_stats = BackgroundCfSupplement(
+                settings=settings, bridge=bridge
+            ).apply(raw_method_cfs)
+            report.add_stage("background_cfs", cf_stats)
         method_cfs = {key: cls._project_method_cfs(df) for key, df in raw_method_cfs.items()}
 
         # Regional CFs (AWARE per ISO country for water-use). Optional —

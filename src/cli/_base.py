@@ -25,7 +25,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 class BaseCli:
     """Common CLI behaviour. Concrete CLIs subclass and override."""
 
-    settings: Settings = field(default_factory=Settings)
+    settings: Settings = field(default_factory=Settings.from_environment)
 
     PROG: ClassVar[str] = "cli"
     DESCRIPTION: ClassVar[str] = ""

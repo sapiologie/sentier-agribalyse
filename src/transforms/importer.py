@@ -27,7 +27,7 @@ class SimaProImporter:
         return Logging.get(__name__)
 
     def load(self) -> ParsedSimaProCsv:
-        cache_path = self.settings.paths.importer_cache_pkl
+        cache_path = AgribalyseCsvSource(settings=self.settings).parse_cache
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         if cache_path.exists():
             with StepTimer(self._log, "csv.load.cache_hit", path=cache_path.name):

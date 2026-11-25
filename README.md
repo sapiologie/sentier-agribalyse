@@ -81,7 +81,8 @@ Run every script as `uv run <script>`.
 
 | Command | What it does |
 |---|---|
-| `dds-bootstrap-ecoinvent` | Once per clone. Download ecoinvent with your credentials and write the four ecoinvent-derived files under `source/`. Needs the `bootstrap` extra. `--fresh`, `--discard-project`. |
+| `dds-bootstrap-ecoinvent` | Once per clone. Download ecoinvent with your credentials and write the four ecoinvent-derived files under `source/`. Needs the `bootstrap` extra. `--ecoinvent-version`, `--fresh`, `--discard-project`. |
+| `dds-build-release-bridge` | Only with a background release. Build the dataset and elementary-flow bridge from ecoinvent 3.9.1 to it, from ecoinvent's correspondence files. `--correspondence-dir`. |
 | `dds-snapshot-ecoinvent-exchanges` | Alternative for an existing Brightway project: dump its ecoinvent exchanges into `source/`. |
 | `dds-fetch-harmonised-flows` | Download the pinned Brightway Flows list into `source/` and check its sha256. Once per clone. `--force`. |
 | `dds-build-registry` | Build `registry/*.parquet` from every `source/` artifact. Run after the fetch. |
@@ -102,6 +103,7 @@ Run every script as `uv run <script>`.
 | `dds-decompose-score` | Explain one `(product, method)` score: top biosphere-flow contributions. |
 | `dds-build-bw-package` | Export `bw_package/`: bw_processing datapackages plus a standalone Brightway importer. Needs the `bw` extra. |
 | `dds-build-skeleton` | Strip ecoinvent amounts from a scoring package into an AGB-only skeleton. |
+| `dds-export-linked-inventory` | Export the linked inventory as one JSON file: per process, its inputs from other processes, ecoinvent datasets (published ids) and ecoinvent elementary flows. `--output`. |
 | `dds-mappings-comparison` | Regenerate `to_review/mappings_comparison.xlsx` from the cached link. |
 | `dds-llm-suggest-mappings` | LLM picks for residual unlinked flows. Appends accepted rows to the reviewed xlsx. |
 | `dds-set-parameter` | Override a SimaPro input parameter, then relink and rescore. `--fast`, `--no-rescore`. |
@@ -176,6 +178,99 @@ Share of the 2,451 backtested products within ±5% of ADEME's reference. "Shippe
 The drop against v0.4.1 is the bypassed adaptations and the unlinked inputs, and goes away when the adapted datasets are rebuilt. The differences between v0.4.1 and the full export have another cause: with the shipped file the ecoinvent background keeps its own sub-compartments and locations, where the embedded copies are aggregated blocks.
 
 Maintainers holding the full export rebuild the three files with `uv run dds-strip-ecoinvent`. It fails if any process of the aggregated-process deletion list survives; the commit guard refuses an archive that still holds a `Copied from` or `Adapted from Ecoinvent` block; and `tests/integration/test_ecoinvent_free_csv_shipped.py` audits the committed files.
+
+## A later ecoinvent release as background
+
+Agribalyse 3.2 names its ecoinvent inputs in ecoinvent 3.9.1, and every matching rule of this
+repository speaks that vocabulary. The inventory can still be built and scored on a later
+release, called the background release here:
+
+```bash
+uv run dds-bootstrap-ecoinvent                              # 3.9.1, as before
+uv run dds-bootstrap-ecoinvent --ecoinvent-version 3.13     # the background release
+echo "DDS_BACKGROUND_ECOINVENT=3.13" >> .env
+uv run dds-build-registry                                   # and the other build commands
+uv run dds-build-release-bridge --correspondence-dir ~/ecoinvent/correspondence
+uv run dds-link-all
+uv run dds-backtest --solver pardiso
+```
+
+`--correspondence-dir` holds the `Correspondence File vX - vY.xlsx` workbooks ecoinvent
+publishes for each release step between the two (ecoQuery, Files, Supporting documents). No
+workbook exists for a patch release such as 3.10.1, and ecoinvent reissued its dataset ids
+there: the chain joins it to 3.10 on the ids where they match and on the dataset's name,
+geography and product otherwise.
+
+What changes with a background release:
+
+- Linking is unchanged. It still runs against the 3.9.1 names, so every tier, override and
+  correction keeps applying.
+- ADEME's full export, when you have it, is read without its `Copied from Ecoinvent` blocks:
+  they are ecoinvent datasets frozen as 3.9.1 had them, which no background release could
+  reach. The pipeline takes them from ecoinvent instead, exactly as it does for the shipped
+  file, and keeps ADEME's `Adapted from Ecoinvent` datasets. `DDS_EMBEDDED_COPIES=replace`
+  asks for that reading without a background release, `DDS_EMBEDDED_COPIES=keep` for the
+  export as it is with one.
+- After linking, each input on a 3.9.1 dataset moves to its successors in the background
+  release, for the share the correspondence files give them (a dataset split by geography
+  becomes several inputs). When a part of a dataset lost its successor on the way, the
+  remaining successors take the whole input. An input whose dataset has no successor at all
+  is unlinked. Both cases are counted and listed in `dashboard/run_report.json` under
+  `stages.background_rebase`: nothing stays on 3.9.1 silently.
+- The background matrix is the background release's. Its elementary flows are read into the
+  3.9.1 namespace wherever a flow continues one of 3.9.1 (ecoinvent keeps a flow's id when it
+  renames it), so the CF registry and the regional corrections apply to them. A flow the
+  background release introduced keeps its own id and the factor that release publishes for it.
+- The reference scores are still ADEME's, computed on 3.9.1: the backtest then measures the
+  effect of the newer background on top of the linking gaps. Compare it with a 3.9.1 run.
+
+Measured with ADEME's full export read without its copies, on ecoinvent 3.13 (2026-11): every
+one of the 64,177 inputs Agribalyse takes from ecoinvent 3.9.1 finds its place in 3.13, 1,568 of
+them on a dataset that was split, 7 on a dataset that lost a part of itself. Share of the 2,451
+backtested products within ±5% of ADEME's reference, and median ratio of the 3.13 score to the
+3.9.1 one:
+
+| | 3.9.1 | 3.13 | 3.13 / 3.9.1 |
+|---|---|---|---|
+| Climate change | 99.8% | 95.1% | 1.00 |
+| Climate change, fossil / biogenic / land use change | 99.5% / 99.8% / 100.0% | 98.9% / 63.1% / 80.7% | 1.00 / 1.00 / 1.00 |
+| Ozone depletion | 100.0% | 58.1% | 1.00 |
+| Ionising radiation | 100.0% | 2.6% | 0.91 |
+| Photochemical ozone formation | 100.0% | 72.3% | 1.01 |
+| Particulate matter | 98.8% | 88.0% | 0.99 |
+| Acidification | 93.6% | 84.5% | 0.98 |
+| Eutrophication, freshwater / marine / terrestrial | 100.0% / 100.0% / 96.2% | 13.8% / 96.4% / 94.9% | 1.11 / 1.00 / 1.00 |
+| Land use | 100.0% | 91.6% | 1.01 |
+| Energy resources / material resources | 100.0% / 100.0% | 89.9% / 39.9% | 0.97 / 0.94 |
+| Human toxicity, non-carcinogenic / carcinogenic | 93.8% / 36.5% | 23.0% / 20.6% | 0.90 / 0.81 |
+| Ecotoxicity, freshwater | 95.8% | 11.3% | 0.88 |
+| Water use | 22.8% | 20.3% | 1.00 |
+| **All 19 indicators** | **91.4%** | **60.3%** | |
+
+The 3.9.1 column is the v0.4.1 column of the table above: reading the full export without its
+copies gives the same inventory as that file. The 3.13 column is not a loss of linking quality:
+ADEME's reference stays on 3.9.1, and the indicators that move are those ecoinvent reworked in
+four releases. Within ±20%, 89.7% of the comparisons hold (97.4% on 3.9.1).
+
+`dds-export-linked-inventory` writes the result for a store that already holds the background
+release: `cache/linked_inventory/links_ecoinvent_<version>.json`, with the datasets named by
+`<activity id>_<product id>` and the elementary flows by id, name and compartments. Amounts are
+per unit of each process's reference product, after allocation; an input of a waste treatment
+dataset counts what is treated, positively. Embedded ecoinvent copies are marked (`origin`) and
+regional corrections are not part of it.
+
+Such a store characterises with ecoinvent's flows only. A flow of the EF list, or one the
+release dropped, is therefore written as the release's flow of the same substance and
+compartment when there is one: same name (after the release's own renamings and the synonyms
+of `source/ef-flow-names-in-ecoinvent.json`), same compartment or its unspecified
+sub-compartment, same unit. On 3.13 that names three quarters of them; the rest (212 flows of
+the EF list, mostly pesticides ecoinvent does not hold) is counted and listed in the command's
+report. Scored with ecoinvent's own EF 3.1 factors, the file gives the pipeline's scores within
+±5% for every backtested product on twelve of the nineteen indicators; the others differ where
+ecoinvent's factors do (water use is not regionalised, unspecified chromium is chromium III).
+
+The files of a background release, the bridge and the export are licensed ecoinvent data like
+the 3.9.1 snapshots: gitignored and refused by the commit guard.
 
 ## Changing parameters (no SimaPro required)
 

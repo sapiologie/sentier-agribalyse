@@ -522,8 +522,9 @@ class TestBootstrapEcoinventCli:
         seen = {}
 
         class FakeBootstrapper:
-            def __init__(self, *, settings, bd, bi):
+            def __init__(self, *, settings, bd, bi, release):
                 seen["modules"] = (bd, bi)
+                seen["release"] = release
 
             def run(self, username, password):
                 seen["credentials"] = (username, password)
@@ -559,6 +560,18 @@ class TestBootstrapEcoinventCli:
         assert "downloaded and imported" in out
         assert "3 exchanges, 2 activities" in out
         assert "secret" not in out
+
+    def test_bootstraps_the_linking_release_unless_told_another(
+        self, settings, monkeypatch, capsys
+    ):
+        cli, seen = self._cli(settings, monkeypatch)
+
+        cli.run([])
+        assert seen["release"] == settings.linking_release
+
+        cli.run(["--ecoinvent-version", "3.13"])
+        assert seen["release"].db_name == "ecoinvent-3.13-cutoff"
+        assert "ecoinvent 3.13: downloaded and imported" in capsys.readouterr().out
 
     def test_keeps_the_project_by_default_and_discards_it_on_request(self, settings, monkeypatch):
         cli, _ = self._cli(settings, monkeypatch)

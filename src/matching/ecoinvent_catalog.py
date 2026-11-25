@@ -205,9 +205,17 @@ class EcoinventCatalogBuilder:
         s = self.settings
         s.paths.ensure_runtime_dirs()
 
-        snap = self._load_snapshot()
+        snap = self._load_snapshot(s.paths.ecoinvent_activities_json)
         db_name = snap.get("db_name") or s.ecoinvent_db_name
         rows = [self._row_for(db_name, activity) for activity in snap.get("activities", [])]
+        if s.has_background_release:
+            # The background release's activities ride in the same catalog under
+            # their own database name: the matcher only ever asks for the linking
+            # database, and the labels and locations of the background columns are
+            # read from here.
+            background = self._load_snapshot(s.paths.release_activities_json(s.background_release))
+            background_db = background.get("db_name") or s.background_release.db_name
+            rows += [self._row_for(background_db, a) for a in background.get("activities", [])]
         df = self._frame(rows)
         target = s.paths.registry_ecoinvent_catalog
         ParquetAtomicWriter.write(df, target)
@@ -216,11 +224,12 @@ class EcoinventCatalogBuilder:
             path=str(target),
             n_rows=len(df),
             db=db_name,
+            background=s.background_release.db_name if s.has_background_release else None,
         )
         return target
 
-    def _load_snapshot(self) -> dict[str, Any]:
-        path = self.settings.paths.ecoinvent_activities_json
+    @staticmethod
+    def _load_snapshot(path: Path) -> dict[str, Any]:
         if not path.exists():
             raise FileNotFoundError(
                 f"ecoinvent activity snapshot missing: {path}. "

@@ -16,6 +16,10 @@ against its own flows). This module produces them:
 ``bw2data`` and ``bw2io`` are passed in, never imported here: the
 ``bootstrap`` extra is the only place they are needed, and the CLI points
 Brightway at a private directory before it imports them.
+
+Every class takes the ``EcoinventRelease`` it works on. It defaults to the
+linking release; the background release (``Settings.background_release``)
+is bootstrapped the same way into files that carry its version.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from cli.snapshot_ecoinvent_exchanges import EcoinventExchangesSnapshotter, EcoinventSqliteReader
-from config import Settings
+from config import EcoinventRelease, Settings
 from core.logging import Logging
 
 
@@ -41,13 +45,15 @@ class EcoinventReleaseImporter:
     settings: Settings
     bd: Any
     bi: Any
+    release: EcoinventRelease | None = None
 
     PROJECT: ClassVar[str] = "dds-bootstrap"
 
     def ensure(self, username: str | None, password: str | None) -> bool:
         """Import the release unless it is already there. Returns ``True`` if it imported."""
+        release = self.release or self.settings.linking_release
         self.bd.projects.set_current(self.PROJECT)
-        if self.settings.ecoinvent_db_name in self.bd.databases:
+        if release.db_name in self.bd.databases:
             return False
         if not username or not password:
             raise EcoinventCredentialsMissingError(
@@ -58,16 +64,14 @@ class EcoinventReleaseImporter:
         # Single process: with the spawn start method (Windows, macOS) bw2io's
         # workers re-import the main module and re-run the import recursively.
         self.bi.import_ecoinvent_release(
-            version=self.settings.resolved_ecoinvent_version,
-            system_model=self.settings.ecoinvent_system_model,
+            version=release.version,
+            system_model=release.system_model,
             username=username,
             password=password,
             use_mp=False,
         )
-        if self.settings.ecoinvent_db_name not in self.bd.databases:
-            raise RuntimeError(
-                f"bw2io finished but {self.settings.ecoinvent_db_name!r} is not in the project."
-            )
+        if release.db_name not in self.bd.databases:
+            raise RuntimeError(f"bw2io finished but {release.db_name!r} is not in the project.")
         return True
 
 
@@ -77,19 +81,25 @@ class EcoinventMetadataSnapshotter:
 
     settings: Settings
     bd: Any
+    release: EcoinventRelease | None = None
+
+    @property
+    def _release(self) -> EcoinventRelease:
+        return self.release or self.settings.linking_release
 
     def snapshot(self) -> dict[str, int]:
+        release = self._release
         activities = self._activities()
         flows = self._flows()
         methods = self._methods()
         paths = self.settings.paths
         self._write(
-            paths.ecoinvent_activities_json,
-            {"db_name": self.settings.ecoinvent_db_name, "activities": activities},
+            paths.release_activities_json(release),
+            {"db_name": release.db_name, "activities": activities},
         )
-        self._write(paths.ecoinvent_biosphere_flows_json, {"flows": flows})
+        self._write(paths.release_biosphere_flows_json(release), {"flows": flows})
         self._write(
-            paths.ef_methods_snapshot_json,
+            self.settings.ef_methods_snapshot_for(release),
             {"ef_db_name": self.settings.ef_db_name, "methods": methods},
         )
         return {
@@ -107,10 +117,23 @@ class EcoinventMetadataSnapshotter:
                 "unit": node.get("unit"),
                 "location": node.get("location"),
                 "reference_product": node.get("reference product"),
+                **self._published_ids(node),
             }
-            for node in self.bd.Database(self.settings.ecoinvent_db_name)
+            for node in self.bd.Database(self._release.db_name)
         ]
         return sorted(rows, key=lambda r: r["code"])
+
+    @staticmethod
+    def _published_ids(node: Any) -> dict[str, str | None]:
+        """The activity and reference-product ids ecoinvent publishes the dataset
+        under: its file is ``<activity id>_<product id>.spold``. They are what the
+        correspondence files and any other ecoinvent store identify it by."""
+        stem = str(node.get("filename") or "").removesuffix(".spold")
+        activity_id, _, product_id = stem.partition("_")
+        return {
+            "activity_uuid": activity_id or node.get("activity"),
+            "product_uuid": product_id or node.get("flow"),
+        }
 
     def _flows(self) -> list[dict[str, Any]]:
         rows = [
@@ -122,15 +145,12 @@ class EcoinventMetadataSnapshotter:
                 "cas": node.get("CAS number"),
                 "synonyms": list(node.get("synonyms") or ()),
             }
-            for node in self.bd.Database(self.settings.biosphere_db_name)
+            for node in self.bd.Database(self._release.biosphere_db_name)
         ]
         return sorted(rows, key=lambda r: r["code"])
 
     def _methods(self) -> dict[str, dict[str, Any]]:
-        prefix = (
-            f"ecoinvent-{self.settings.resolved_ecoinvent_version}",
-            f"EF v{self.settings.ef_version}",
-        )
+        prefix = (self._release.method_prefix, f"EF v{self.settings.ef_version}")
         keys = sorted(key for key in self.bd.methods if tuple(key[:2]) == prefix)
         if not keys:
             raise RuntimeError(
@@ -166,23 +186,30 @@ class EcoinventBootstrapper:
     settings: Settings
     bd: Any
     bi: Any
+    release: EcoinventRelease | None = None
 
     @property
     def _log(self) -> Any:
         return Logging.get(__name__)
 
     def run(self, username: str | None, password: str | None) -> dict[str, Any]:
-        imported = EcoinventReleaseImporter(settings=self.settings, bd=self.bd, bi=self.bi).ensure(
-            username, password
-        )
+        release = self.release or self.settings.linking_release
+        imported = EcoinventReleaseImporter(
+            settings=self.settings, bd=self.bd, bi=self.bi, release=release
+        ).ensure(username, password)
         sqlite_path = Path(self.bd.projects.dir) / "lci" / "databases.db"
         exchanges = EcoinventExchangesSnapshotter(
-            reader=EcoinventSqliteReader(
-                sqlite_path=sqlite_path, db_name=self.settings.ecoinvent_db_name
-            ),
-            output_path=self.settings.paths.ecoinvent_exchanges_parquet,
+            reader=EcoinventSqliteReader(sqlite_path=sqlite_path, db_name=release.db_name),
+            output_path=self.settings.paths.release_exchanges_parquet(release),
         ).snapshot()
-        counts = EcoinventMetadataSnapshotter(settings=self.settings, bd=self.bd).snapshot()
-        report = {"imported": imported, "exchanges": exchanges["n_rows"], **counts}
+        counts = EcoinventMetadataSnapshotter(
+            settings=self.settings, bd=self.bd, release=release
+        ).snapshot()
+        report = {
+            "version": release.version,
+            "imported": imported,
+            "exchanges": exchanges["n_rows"],
+            **counts,
+        }
         self._log.info("bootstrap.ecoinvent.done", **report)
         return report
